@@ -3,6 +3,8 @@ from typing import Callable, Any, Tuple
 
 import numpy as np
 import cv2
+import os
+import pickle
 import glob
 import matplotlib.pyplot as plt
 
@@ -27,9 +29,21 @@ class OCAMModel:
     radius : float
     mark_board: np.ndarray
     camera_points: list
+    viewpoint : tuple
+    data_path: str
+    name: str
 
     def __post_init__(self):
-        self.DIM, self.K, self.D = self.get_K_and_D((4, 6), self.chessboardpath)
+        fname = os.path.expanduser(self.data_path+"DIM_K_D_{}.pkl".format(self.name))
+        if os.path.exists(fname):
+            with open(fname, 'rb') as f:
+                self.DIM, self.K, self.D = pickle.load(f)
+        else:
+            self.DIM, self.K, self.D = self.get_K_and_D((4, 6), self.chessboardpath)
+            with open(fname, 'wb') as f:
+                pickle.dump((self.DIM, self.K, self.D), f)
+
+        self.icenter, self.radius = self.get_center_and_radius(self.fname)
         cps_all = []
         for cps in self.camera_points:
             val = self.world_to_image(cps)
@@ -38,7 +52,23 @@ class OCAMModel:
             val[:, 1] = self.height-val[:, 1]
             cps_all.append(val)
         self.camera_points = cps_all
-        self.imagemesh = self.gmshing_new()
+
+        # 判断是否存在网格文件
+        fname = os.path.expanduser(self.data_path+"ocam_mesh_{}.pkl".format(self.name))
+        if os.path.exists(fname):
+            with open(fname, 'rb') as f:
+                self.imagemesh = pickle.load(f)
+        else:
+            self.imagemesh = self.gmshing_new()
+            # 保存 cps:
+            with open(fname, 'wb') as f:
+                pickle.dump(self.imagemesh, f)
+
+    def set_location(self, location):
+        self.location = location
+
+    def set_axes(self, axes):
+        self.axes = axes
 
     def __call__(self, u):
         icenter = self.icenter
@@ -58,6 +88,13 @@ class OCAMModel:
         #gmsh.option.setNumber("Mesh.MeshSizeMax", 40)  # 最大网格尺寸
         #gmsh.option.setNumber("Mesh.MeshSizeMin", 10)    # 最小网格尺寸
 
+        def add_rectangle(p0, p1, p2, p3):
+            l0 = occ.addLine(p0, p1)
+            l1 = occ.addLine(p1, p2)
+            l2 = occ.addLine(p2, p3)
+            l3 = occ.addLine(p3, p0)
+            return l0, l1, l2, l3
+
         # 获得分割线
         cps = self.camera_points
         lines = []
@@ -66,6 +103,16 @@ class OCAMModel:
             for p in cp:
                 curves.append(occ.addPoint(p[0], p[1], 0))
             lines.append(occ.addSpline(curves))
+
+        # 获取标记板
+        mb = self.mark_board
+        for i in range(6):
+            p0 = occ.addPoint(mb[4*i+0, 0], mb[4*i+0, 1], 0.0)
+            p1 = occ.addPoint(mb[4*i+1, 0], mb[4*i+1, 1], 0.0)
+            p2 = occ.addPoint(mb[4*i+2, 0], mb[4*i+2, 1], 0.0)
+            p3 = occ.addPoint(mb[4*i+3, 0], mb[4*i+3, 1], 0.0)
+            ret = add_rectangle(p0, p1, p2, p3)
+            [lines.append(r) for r in ret]
 
         # 生成区域
         rec  = occ.addRectangle(0, 0, 0, 1920, 1080)
@@ -83,7 +130,8 @@ class OCAMModel:
         def f(dim, tag, x, y, z, lc): 
             m = self.mesh_to_image(np.array([[x, y]]))
             l = np.linalg.norm(m[0]-self.icenter)
-            return 40*(self.radius-l)/self.radius + 2
+            #return 40*(self.radius-l)/self.radius + 2
+            return 80*(self.radius-l)/self.radius + 4
         gmsh.model.mesh.setSizeCallback(f)
 
         ## 生成网格
@@ -342,6 +390,15 @@ class OCAMModel:
         node = np.einsum('ij, kj->ik', node-self.location, self.axes)
         return node
 
+    def project_to_cam_sphere(self, node):
+        """
+        @brief 将球面上的点投影到相机单位球面上
+        """
+        node = node-self.location
+        r = np.sqrt(np.sum(node**2, axis=1))
+        node /= r[:, None]
+        return node + self.location
+
     def mesh_to_image(self, node):
         node[:, 1] = self.height - node[:, 1]
         return node
@@ -374,7 +431,6 @@ class OCAMModel:
         phi = phi % (2 * np.pi)
 
         uv = np.zeros((NN, 2), dtype=np.float64)
-        print("fx, fy, radius", fx, fy, self.radius)
 
         if ptype == 'L': # 等距投影
             uv[:, 0] = fx * theta * np.cos(phi) + u0 
@@ -469,6 +525,7 @@ class OCAMModel:
         u0 = self.K[0, 2]
         v0 = self.K[1, 2]
         node = np.zeros((NN,3),dtype=np.float64)
+
         node[:,0] = uv[:,0]-u0
         node[:,1] = uv[:,1]-v0
 
@@ -476,7 +533,7 @@ class OCAMModel:
         phi = np.arctan2(fx*node[:,1], (fy*node[:,0]))
         phi[phi<0] = phi[phi<0]+np.pi
 
-        idx = np.abs(fx*np.cos(phi))>1e-13
+        idx = np.abs(fx*np.cos(phi))>1e-10
         rho = np.zeros_like(phi)
         rho[idx] = node[idx,0]/(fx*np.cos(phi[idx]))
         rho[~idx] = node[~idx, 1]/(fy*np.sin(phi[~idx]))
@@ -696,7 +753,13 @@ class OCAMModel:
 
         points = self.camera_points
         for i in range(len(points)):
+            # 绘制线
             plt.plot(points[i][:, 0], points[i][:, 1], 'r')
+            # 标记是第i条线, 字体大小为30
+            j = len(points[i]) // 2
+            plt.text(points[i][j, 0], points[i][j, 1], str(i), color='r',
+                     fontsize=30)
+
         if outname is not None:
             plt.savefig(outname)
         plt.show()
@@ -734,6 +797,66 @@ class OCAMModel:
         result = cv2.warpPerspective(img, M, (1920, 1080))
         return result
 
+    def get_center_and_radius(self, image_path):
+        # 读取图像
+        image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        image0 = cv2.imread(image_path)
+        if image is None:
+            print("Error: Unable to load image.")
+            return None, None
+
+        # 对图像进行阈值处理，保留非黑色区域
+        _, thresholded = cv2.threshold(image, 70, 255, cv2.THRESH_BINARY)
+
+        # 找到非黑色区域的轮廓
+        contours, _ = cv2.findContours(thresholded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # 寻找最大轮廓
+        max_contour = max(contours, key=cv2.contourArea)
+
+        # 使用最小外接圆找到中心和半径
+        center, radius = cv2.minEnclosingCircle(max_contour)
+
+        # 绘制最小外接圆
+        #circle_image = image0
+        #cv2.circle(circle_image, center, radius, (0, 255, 0), 2)  # 绘制圆
+        #cv2.circle(circle_image, center, 5, (0, 0, 255), -1)  # 绘制中心点
+
+        # 绘制最大轮廓
+        #contour_image = np.zeros_like(image)
+        #cv2.drawContours(contour_image, [max_contour], 0, (255, 255, 255), 2)
+        #print(f"Center: {center}, Radius: {radius}")
+
+        ## 显示结果
+        #plt.figure(figsize=(8, 6))
+        #plt.imshow(circle_image)
+        #plt.title('Fisheye Center and Radius')
+        #plt.axis('off')
+        #plt.show()
+        return center, radius
+
+    def mesh_to_ground(self, points, ground_location = -3.0):
+        """
+        @brief 将图像上的点投影到地面
+        @param points: 图像上的点 (...， 2) 的数组
+        """
+        f2 = lambda x : x[..., 2] - ground_location
+        points = self.mesh_to_image(points)
+        points = self.image_to_camera_sphere(points)
+        retp = self.sphere_project_to_implict_surface(points, f2)
+        return retp
+
+    def harmonic_map(self):
+        """
+        @brief 调和映射
+        """
+        pass
+
+
+
+
+
+
 class OCAMDomain(Domain):
     def __init__(self,icenter,radius,hmin=10,hmax=20,fh=None):
         super().__init__(hmin=hmin, hmax=hmax, GD=2)
@@ -762,5 +885,45 @@ class OCAMDomain(Domain):
         return self.fh(p,self)
     def facet(self,dim):
         return self.facets[0]
+    import numpy as np
+
+def rotation_matrix_from_euler_angles(theta, gamma, beta):
+    """
+    Compute the rotation matrix from Euler angles.
+
+    Parameters:
+    theta (float): Rotation angle around the x-axis in radians.
+    gamma (float): Rotation angle around the y-axis in radians.
+    beta (float): Rotation angle around the z-axis in radians.
+
+    Returns:
+    np.ndarray: The resulting rotation matrix.
+    """
+    # Rotation matrix around x-axis
+    R_x = np.array([
+        [1, 0, 0],
+        [0, np.cos(theta), -np.sin(theta)],
+        [0, np.sin(theta), np.cos(theta)]
+    ])
+
+    # Rotation matrix around y-axis
+    R_y = np.array([
+        [np.cos(gamma), 0, np.sin(gamma)],
+        [0, 1, 0],
+        [-np.sin(gamma), 0, np.cos(gamma)]
+    ])
+
+    # Rotation matrix around z-axis
+    R_z = np.array([
+        [np.cos(beta), -np.sin(beta), 0],
+        [np.sin(beta), np.cos(beta), 0],
+        [0, 0, 1]
+    ])
+
+    # Combined rotation matrix
+    R = R_z @ R_y @ R_x
+    return R
+
+
     
 

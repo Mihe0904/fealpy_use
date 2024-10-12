@@ -1,2 +1,2 @@
 
-from .laplace_data_generator import LaplaceDataGenerator2d
+from .eit_data_generator import EITDataGenerator

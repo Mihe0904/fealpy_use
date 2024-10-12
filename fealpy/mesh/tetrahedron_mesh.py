@@ -35,6 +35,9 @@ class TetrahedronMeshDataStructure(Mesh3dDataStructure):
         return face2edgeSign
 
     def cell_to_face_permutation(self, locFace = None):
+        """
+        局部面到全局面的映射
+        """
         if locFace is None:
             locFace = self.localFace
 
@@ -177,6 +180,25 @@ class TetrahedronMesh(Mesh, Plotable):
             vjk = node[cell[index, k],:] - node[cell[index, j],:]
             vjm = node[cell[index, m],:] - node[cell[index, j],:]
             Dlambda[:, i, :] = np.cross(vjm, vjk)/(6*volume.reshape(-1, 1))
+        return Dlambda
+    
+    def grad_face_lambda(self, index=np.s_[:]):
+
+        node = self.entity('node')
+        face = self.entity('face', index=index)
+        NF = face.shape[0]
+        v0 = node[face[..., 2]] - node[face[..., 1]]
+        v1 = node[face[..., 0]] - node[face[..., 2]]
+        v2 = node[face[..., 1]] - node[face[..., 0]]
+        GD = self.geo_dimension()
+        nv = np.cross(v1, v2)
+        Dlambda = np.zeros((NF, 3, GD), dtype=self.ftype)
+
+        length = np.linalg.norm(nv, axis=-1, keepdims=True)
+        n = nv / length
+        Dlambda[:, 0] = np.cross(n, v0) / length
+        Dlambda[:, 1] = np.cross(n, v1) / length
+        Dlambda[:, 2] = np.cross(n, v2) / length
         return Dlambda
 
     def grad_shape_function(self, bc, p=1, index=np.s_[:], variables='x'):
@@ -352,6 +374,7 @@ class TetrahedronMesh(Mesh, Plotable):
         edgeIdx = np.zeros((2, p+1), dtype=np.int_)
         edgeIdx[0, :] = range(p+1)
         edgeIdx[1, :] = edgeIdx[0, -1::-1]
+
 
         NN = self.number_of_nodes()
         NE = self.number_of_edges()
@@ -1056,6 +1079,9 @@ class TetrahedronMesh(Mesh, Plotable):
             newCell[7*NC:, 1] = p[range(NC), T[:, 0]]
             newCell[7*NC:, 2] = p[range(NC), T[:, 4]]
             newCell[7*NC:, 3] = p[range(NC), T[:, 5]]
+            import ipdb
+            ipdb.set_trace()
+            print(newCell)
 
             self.ds.reinit(NN+NE, newCell)
 

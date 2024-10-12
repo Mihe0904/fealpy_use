@@ -113,7 +113,8 @@ class UniformMesh2d(Mesh, Plotable):
         """
         @brief 返回单元的面积，注意这里只返回一个值（因为所有单元面积相同）
         """
-        return self.h[0] * self.h[1]
+        #return self.h[0] * self.h[1]
+        return np.full(self.NC, self.h[0] * self.h[1])
 
     ## @ingroup GeneralInterface
     def edge_length(self, index=np.s_[:]):
@@ -130,25 +131,24 @@ class UniformMesh2d(Mesh, Plotable):
         """
         hx = self.h[0]
         hy = self.h[1]
-
-        v = p - np.array(self.origin, dtype=p.dtype)
+        v = np.real(p - np.array(self.origin, dtype=p.dtype))
         n0 = v[..., 0] // hx
         n1 = v[..., 1] // hy
 
         return n0.astype('int64'), n1.astype('int64')
-    
+
     ## @ingroup GeneralInterface
     def point_to_bc(self, p):
 
         x = p[..., 0]
         y = p[..., 1]
-        
-        bc_x_ = ((x - self.origin[0]) / self.h[0]) % 1
-        bc_y_ = ((y - self.origin[1]) / self.h[1]) % 1
+
+        bc_x_ = np.real((x - self.origin[0]) / self.h[0]) % 1
+        bc_y_ = np.real((y - self.origin[1]) / self.h[1]) % 1
         bc_x = np.array([[bc_x_, 1 - bc_x_]], dtype=np.float64)
         bc_y = np.array([[bc_y_, 1 - bc_y_]], dtype=np.float64)
         val = (bc_x, bc_y)
-        
+
         return val
 
     ## @ingroup GeneralInterface
@@ -788,8 +788,6 @@ class UniformMesh2d(Mesh, Plotable):
         """
         rx = tau / self.h[0] ** 2
         ry = tau / self.h[1] ** 2
-        if rx + ry > 1.5:
-            raise ValueError(f"The sum rx + ry: {rx + ry} should be smaller than 0.5")
 
         NN = self.number_of_nodes()
         n0 = self.nx + 1
@@ -1203,7 +1201,7 @@ class UniformMesh2d(Mesh, Plotable):
             raise ValueError('the entity type `{etype}` is not correct!')
 
     ## @ingroup FEMInterface
-    def entity_measure(self, etype, index=np.s_[:]):
+    def entity_measure(self, etype=2, index=np.s_[:]):
         """
         @brief
         """

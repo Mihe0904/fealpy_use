@@ -457,7 +457,6 @@ class HalfEdgeMesh2d(Mesh, Plotable):
             R = self._grad_shape_function(bc, p)
             if variables == 'x':
                 Dlambda = self.grad_lambda(index=index)
-                print(R.shape, Dlambda.shape)
                 gphi = np.einsum('...ij, kjm->...kim', R, Dlambda)
                 return gphi #(NQ, NC, ldof, GD)
             elif variables == 'u':
@@ -1318,6 +1317,7 @@ class HalfEdgeMesh2d(Mesh, Plotable):
         hlevel   = self.halfedgedata['level']
         halfedge = self.entity('halfedge')
         isMainHEdge = self.ds.main_halfedge_flag()
+        NC = self.number_of_cells()
 
         isMarkedCell = np.ones(NC, dtype=np.bool_) if isMarkedCell is None else isMarkedCell
         isMarkedHEdge = self.mark_halfedge(isMarkedCell, method='poly')
@@ -3336,7 +3336,7 @@ class HalfEdgeMesh2dDataStructure():
         NC = self.NC 
         NHE = self.NHE 
         halfedge2cellnum = np.zeros(NHE, dtype=np.int_) # 每条半边所在单元的编号
-        hcell = self.hcell[:]
+        hcell = self.hcell[:].copy()
         isNotOK = np.ones(NC, dtype=np.bool_)
         i = 0
         while np.any(isNotOK):

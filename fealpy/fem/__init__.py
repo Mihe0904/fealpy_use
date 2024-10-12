@@ -9,6 +9,7 @@ This module provide many fem model
 from .bilinear_form import BilinearForm
 from .mixed_bilinear_form import MixedBilinearForm
 from .linear_form import LinearForm
+from .nonlinear_form import NonlinearForm
 
 # Domain integrator for scalar case
 from .scalar_diffusion_integrator import ScalarDiffusionIntegrator
@@ -28,6 +29,7 @@ from .scalar_interior_penalty_integrator import ScalarInteriorPenaltyIntegrator
 from .scalar_robin_boundary_integrator import ScalarRobinBoundaryIntegrator
 # <g, v>
 from .scalar_boundary_source_integrator import ScalarBoundarySourceIntegrator
+from .scalar_interface_integrator import ScalarInterfaceIntegrator
 # <g_N, v>
 ScalarNeumannSourceIntegrator = ScalarBoundarySourceIntegrator
 # <g_R, v>
@@ -63,3 +65,7 @@ from .scalar_neumann_bc_integrator import ScalarNeumannBCIntegrator
 from .dirichlet_bc import DirichletBC
 from .recovery_alg import recovery_alg, LinearRecoveryAlg
 from .fluid_boundary_friction_integrator import FluidBoundaryFrictionIntegrator
+
+
+
+from .darcy_integrator import VectorDarcyIntegrator

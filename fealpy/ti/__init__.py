@@ -1,7 +1,16 @@
+import logging
 
-from .TriangleMesh import TriangleMesh
-from .TetrahedronMesh import TetrahedronMesh
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+handler = logging.StreamHandler()
+formatter = logging.Formatter('[%(asctime)s][%(levelname)s] %(name)s: %(message)s', datefmt='%m-%d %H:%M:%S')
+handler.setFormatter(formatter)
 
-from .LagrangeFiniteElementSpace import LagrangeFiniteElementSpace
+if not logger.handlers:
+    logger.addHandler(handler)
+    logger.propagate = False
 
-from .GeoModel import GeoModel
+__version__ = "0.0.1"
+
+from .utils import *
+from .functional import * 

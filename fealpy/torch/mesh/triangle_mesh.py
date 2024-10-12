@@ -1,7 +1,6 @@
 
-from typing import Optional, Union
+from typing import Optional, Union, List
 
-import numpy as np
 import torch
 from torch import Tensor
 
@@ -10,8 +9,7 @@ from fealpy.torch.mesh.quadrature import Quadrature
 
 from .. import logger
 from . import functional as F
-from . import mesh_kernel as K
-from .mesh_base import HomoMeshDataStructure, HomoMesh, entity_str2dim
+from .mesh_base import SimplexMesh, estr2dim
 
 Index = Union[Tensor, int, slice]
 _dtype = torch.dtype
@@ -20,11 +18,12 @@ _device = torch.device
 _S = slice(None)
 
 
-class TriangleMeshDataStructure(HomoMeshDataStructure):
-    def __init__(self, NN: int, cell: Tensor):
-        super().__init__(NN, 2, cell)
+class TriangleMesh(SimplexMesh):
+    def __init__(self, node: Tensor, cell: Tensor) -> None:
+        super().__init__(TD=2)
         # constant tensors
         kwargs = {'dtype': cell.dtype, 'device': cell.device}
+        self.cell = cell
         self.localEdge = torch.tensor([(1, 2), (2, 0), (0, 1)], **kwargs)
         self.localFace = torch.tensor([(1, 2), (2, 0), (0, 1)], **kwargs)
         self.ccw = torch.tensor([0, 1, 2], **kwargs)
@@ -36,44 +35,13 @@ class TriangleMeshDataStructure(HomoMeshDataStructure):
 
         self.construct()
 
-    def total_face(self):
-        return self.cell[..., self.localFace].reshape(-1, 2)
-
-    def construct(self) -> None:
-        NC = self.cell.shape[0]
-        NFC = self.cell.shape[1]
-
-        totalFace = self.total_face()
-        _, i0_np, j_np = np.unique(
-            torch.sort(totalFace, dim=1)[0].cpu().numpy(),
-            return_index=True,
-            return_inverse=True,
-            axis=0
-        )
-        self.face = totalFace[i0_np, :] # this also adds the edge in 2-d meshes
-        NF = i0_np.shape[0]
-
-        i1_np = np.zeros(NF, dtype=i0_np.dtype)
-        i1_np[j_np] = np.arange(NFC*NC, dtype=i0_np.dtype)
-
-        self.cell2edge = torch.from_numpy(j_np).to(self.device).reshape(NC, NFC)
-        self.cell2face = self.cell2edge
-
-        face2cell_np = np.stack([i0_np//NFC, i1_np//NFC, i0_np%NFC, i1_np%NFC], axis=-1)
-        self.face2cell = torch.from_numpy(face2cell_np).to(self.device)
-        self.edge2cell = self.face2cell
-
-        logger.info(f"Mesh toplogy relation constructed, with {NF} edge (or face), "
-                    f"on device {self.device}")
-
-
-class TriangleMesh(HomoMesh):
-    def __init__(self, node: Tensor, cell: Tensor) -> None:
         self.node = node
-        self.ds = TriangleMeshDataStructure(node.shape[0], cell)
+        self._attach_functionals()
+        self.nodedata = {}
+        self.celldata = {}
 
-        GD = node.size(-1)
-
+    def _attach_functionals(self):
+        GD = self.geo_dimension()
         if GD == 2:
             self._cell_area = F.simplex_measure
             self._grad_lambda = F.tri_grad_lambda_2d
@@ -85,55 +53,49 @@ class TriangleMesh(HomoMesh):
                         "cell_area and grad_lambda are not available. "
                         "Any operation involving them will fail.")
 
+    # entity
     def entity_measure(self, etype: Union[int, str], index: Optional[Index]=None) -> Tensor:
         node = self.node
         if isinstance(etype, str):
-            etype = entity_str2dim(self.ds, etype)
+            etype = estr2dim(self, etype)
         if etype == 0:
-            return node if index is None else node[index]
+            return torch.tensor([0,], dtype=self.ftype, device=self.device)
         elif etype == 1:
             edge = self.entity(1, index)
-            return F.edge_length(node[edge])
+            return F.edge_length(edge, node)
         elif etype == 2:
             cell = self.entity(2, index)
-            return self._cell_area(node[cell])
+            return self._cell_area(cell, node)
         else:
             raise ValueError(f"Unsupported entity or top-dimension: {etype}")
 
-    def integrator(self, q: int, etype: Union[int, str]='cell',
-                   qtype: str='legendre') -> Quadrature: # TODO: other qtype
+    # quadrature
+    def quadrature_formula(self, q: int, etype: Union[int, str]='cell',
+                           qtype: str='legendre') -> Quadrature: # TODO: other qtype
         from .quadrature import TriangleQuadrature
+        from .quadrature import GaussLegendreQuadrature
+
         if isinstance(etype, str):
-            etype = entity_str2dim(self.ds, etype)
+            etype = estr2dim(self, etype)
         kwargs = {'dtype': self.ftype, 'device': self.device}
         if etype == 2:
-            quad = TriangleQuadrature(**kwargs)
+            quad = TriangleQuadrature(q, **kwargs)
         elif etype == 1:
-            raise NotImplementedError
+            quad = GaussLegendreQuadrature(q, **kwargs)
         else:
             raise ValueError(f"Unsupported entity or top-dimension: {etype}")
-        quad._latest_order = q
+
         return quad
 
-    def number_of_local_ipoints(self, p: int, iptype: Union[int, str]='cell'):
-        if isinstance(iptype, str):
-            iptype = entity_str2dim(self.ds, iptype)
-        return F.simplex_ldof(p, iptype)
-
-    def number_of_global_ipoints(self, p: int):
-        return F.simplex_gdof(p, self)
-
-    def interpolation_points(self, p: int, index=np.s_[:]):
-        """
-        @brief Fetch all p-order interpolation points on a triangle mesh.
-        """
+    # ipoints
+    def interpolation_points(self, p: int, index: Index=_S) -> Tensor:
+        """Fetch all p-order interpolation points on the triangle mesh."""
         node = self.entity('node')
         if p == 1:
             return node
         if p <= 0:
             raise ValueError("p must be a integer larger than 0.")
 
-        cell = self.entity('cell')
         ipoint_list = []
         kwargs = {'dtype': self.ftype, 'device': self.device}
 
@@ -150,6 +112,7 @@ class TriangleMesh(HomoMesh):
 
         if p >= 3:
             TD = self.top_dimension()
+            cell = self.entity('cell')
             multiIndex = self.multi_index_matrix(p, TD)
             isEdgeIPoints = (multiIndex == 0)
             isInCellIPoints = ~(isEdgeIPoints[:, 0] | isEdgeIPoints[:, 1] |
@@ -162,7 +125,7 @@ class TriangleMesh(HomoMesh):
         return torch.cat(ipoint_list, dim=0)  # (gdof, GD)
 
     def cell_to_ipoint(self, p: int, index: Index=_S) -> Tensor:
-        cell = self.ds.cell
+        cell = self.cell
         if p == 1:
             return cell[index]
 
@@ -170,9 +133,9 @@ class TriangleMesh(HomoMesh):
         idx0, = torch.nonzero(mi[:, 0] == 0, as_tuple=True)
         idx1, = torch.nonzero(mi[:, 1] == 0, as_tuple=True)
         idx2, = torch.nonzero(mi[:, 2] == 0, as_tuple=True)
-        kwargs = {'dtype': self.ds.itype, 'device': self.device}
+        kwargs = {'dtype': self.itype, 'device': self.device}
 
-        face2cell = self.ds.face_to_cell()
+        face2cell = self.face_to_cell()
         NN = self.number_of_nodes()
         NE = self.number_of_edges()
         NC = self.number_of_cells()
@@ -209,34 +172,121 @@ class TriangleMesh(HomoMesh):
     def face_to_ipoint(self, p: int, index: Index=_S) -> Tensor:
         return self.edge_to_ipoint(p, index)
 
+    # shape function
     def grad_lambda(self, index: Index=_S):
-        return self._grad_lambda(self.node[self.ds.cell[index]])
+        return self._grad_lambda(self.cell[index], self.node)
 
-    def shape_function(self, bc: Tensor, p: int=1, *, index: Index=_S,
-                       variable: str='u', mi: Optional[Tensor]=None) -> Tensor:
-        TD = bc.shape[-1] - 1
-        mi = mi or F.multi_index_matrix(p, TD, dtype=self.ds.itype, device=self.device)
-        phi = K.simplex_shape_function(bc, p, mi)
-        if variable == 'u':
-            return phi
-        elif variable == 'x':
-            return phi.unsqueeze_(1)
-        else:
-            raise ValueError("Variable type is expected to be 'u' or 'x', "
-                             f"but got '{variable}'.")
+    # constructor
+    @classmethod
+    def from_box(cls, box: List[int]=[0, 1, 0, 1], nx=10, ny=10, threshold=None, *,
+                 itype: Optional[_dtype]=torch.int,
+                 ftype: Optional[_dtype]=torch.float64,
+                 device: Union[_device, str, None]=None,
+                 require_grad: bool=False):
+        """Generate a uniform triangle mesh for a box domain.
 
-    def grad_shape_function(self, bc: Tensor, p: int=1, *, index: Index=_S,
-                            variable: str='u', mi: Optional[Tensor]=None) -> Tensor:
-        TD = bc.shape[-1] - 1
-        mi = mi or F.multi_index_matrix(p, TD, dtype=self.ds.itype, device=self.device)
-        R = K.simplex_grad_shape_function(bc, p, mi) # (NQ, ldof, bc)
-        if variable == 'u':
-            return R
-        elif variable == 'x':
-            Dlambda = self.grad_lambda(index=index)
-            gphi = torch.einsum('...bm, kjb -> k...jm', Dlambda, R) # (NQ, NC, ldof, dim)
-            # NOTE: the subscript 'k': NQ, 'm': dim, 'j': ldof, 'b': bc, '...': cell
-            return gphi
+        Parameters:
+            box (List[int]): 4 integers, the left, right, bottom, top of the box.\n
+            nx (int, optional): Number of divisions along the x-axis, defaults to 10.\n
+            ny (int, optional): Number of divisions along the y-axis, defaults to 10.\n
+            threshold (Callable | None, optional): Optional function to filter cells.
+                Based on their barycenter coordinates, defaults to None.
+
+        Returns:
+            TriangleMesh: Triangle mesh instance.
+        """
+        fkwargs = {'dtype': ftype, 'device': device}
+        ikwargs = {'dtype': itype, 'device': device}
+        NN = (nx + 1) * (ny + 1)
+        NC = nx * ny
+        X, Y = torch.meshgrid(
+            torch.linspace(box[0], box[1], nx + 1, **fkwargs),
+            torch.linspace(box[2], box[3], ny + 1, **fkwargs),
+            indexing='ij'
+        )
+        node = torch.stack([X.ravel(), Y.ravel()], dim=-1)
+
+        idx = torch.arange(NN, **ikwargs).reshape(nx + 1, ny + 1)
+        cell = torch.zeros((2 * NC, 3), **ikwargs)
+        cell[:NC, 0] = idx[1:, 0:-1].T.flatten()
+        cell[:NC, 1] = idx[1:, 1:].T.flatten()
+        cell[:NC, 2] = idx[0:-1, 0:-1].T.flatten()
+        cell[NC:, 0] = idx[0:-1, 1:].T.flatten()
+        cell[NC:, 1] = idx[0:-1, 0:-1].T.flatten()
+        cell[NC:, 2] = idx[1:, 1:].T.flatten()
+
+        if threshold is not None:
+            bc = torch.sum(node[cell, :], axis=1) / cell.shape[1]
+            isDelCell = threshold(bc)
+            cell = cell[~isDelCell]
+            isValidNode = torch.zeros(NN, dtype=torch.bool)
+            isValidNode[cell] = True
+            node = node[isValidNode]
+            idxMap = torch.zeros(NN, dtype=cell.dtype)
+            idxMap[isValidNode] = range(isValidNode.sum())
+            cell = idxMap[cell]
+
+        node.requires_grad_(require_grad)
+
+        return cls(node, cell)
+
+    @classmethod
+    def from_numpy(cls, mesh):
+        import numpy as np
+
+        new_mesh = cls.__new__(cls)
+        SimplexMesh.__init__(new_mesh, TD=2)
+
+        for name, tensor_obj in mesh.__dict__.items():
+            if isinstance(tensor_obj, np.ndarray):
+                setattr(new_mesh, name, torch.from_numpy(tensor_obj))
+
+        # NOTE: Meshes in old numpy version has `ds`` instead of `_entity_storage`.
+        if hasattr(mesh, '_entity_storage'):
+            for etype, entity in mesh._entity_storage.items():
+                new_mesh._entity_storage[etype] = torch.from_numpy(entity)
+
+        if hasattr(mesh, 'ds'):
+            for name, tensor_obj in mesh.ds.__dict__.items():
+                if isinstance(tensor_obj, np.ndarray):
+                    setattr(new_mesh, name, torch.from_numpy(tensor_obj))
+
+        new_mesh._attach_functionals()
+
+        return new_mesh
+    
+    def vtk_cell_type(self, etype='cell'):
+        if etype in {'cell', 2}:
+            VTK_TRIANGLE = 5
+            return VTK_TRIANGLE
+        elif etype in {'face', 'edge', 1}:
+            VTK_LINE = 3
+            return VTK_LINE
+    
+    def to_vtk(self, fname:Optional[str]=None, etype:Union[int, str]='cell', index:Index=_S):
+        """
+        @brief 把网格转化为 vtk 的数据格式
+        """
+        from .vtk_extent import write_to_vtu
+
+        fkwargs = {'dtype': self.ftype, 'device': self.device}
+        node = self.entity('node')
+        GD = self.geo_dimension()
+        if GD == 2:
+            node = torch.concatenate((node, torch.zeros((node.shape[0], 1), **fkwargs)), axis=1)
+
+        cell = self.entity(etype)[index]
+        cellType = self.vtk_cell_type(etype)
+        NV = cell.shape[-1]
+
+        cell = torch.cat((torch.zeros((len(cell), 1), **fkwargs), cell), dim=1)
+        cell[:, 0] = NV
+
+        NC = len(cell)
+        if fname is None:
+            return node, cell.flatten(), cellType, NC
         else:
-            raise ValueError("Variable type is expected to be 'u' or 'x', "
-                             f"but got '{variable}'.")
+            print("Writting to vtk...")
+            write_to_vtu(fname, node, NC, cellType, cell.flatten(),
+                         nodedata=self.nodedata,
+                         celldata=self.celldata)

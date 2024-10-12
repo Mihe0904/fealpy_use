@@ -1,17 +1,58 @@
-# FEALPy: Finite Element Analysis Library in Python
-
-[![Join the chat at https://gitter.im/weihuayi/fealpy](https://badges.gitter.im/weihuayi/fealpy.svg)](https://gitter.im/weihuayi/fealpy?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+# FEALPy:Finite Element Analysis Library in Python 
 ![Python package](https://github.com/weihuayi/fealpy/workflows/Python%20package/badge.svg)
 ![Upload Python Package](https://github.com/weihuayi/fealpy/workflows/Upload%20Python%20Package/badge.svg)
 
 ![](./FEALPY.png)
 
-We want to develop an efficient and easy to use finite element software
-package to support our teach and research work. 
+While beginning with the finite element algorithm, FEALPy's sights are set on
+exploring vast horizons.
 
-We still have lot work to do. 
+We hope FEALPy will be an open-source library for intelligent CAE simulation
+algorithms, integrating CAE fundamentals with AI to support advanced algorithm
+research and the cultivation of versatile talent.
+
+We also hope FEALPy can accelerate the creation and testing of next-gen
+intelligent CAE apps, paving the way for advanced algorithms in industrial
+applications.
+
+So FEALPy's development goal is to become the next generation intelligent CAE
+simulation computing engine.
+
+The word "FEAL" is an archaic or poetic term in English, meaning faithful or
+loyal. Though not commonly used in modern English, it carries strong
+connotations of unwavering dedication and reliability.
+
+The name "FEALPy" embodies this essence of loyalty and faithfulness. It
+signifies the software's commitment to being a dependable and trustworthy tool
+in the field of intelligent CAE simulation. Just as "FEAL" suggests
+steadfastness, FEALPy aims to provide consistent, reliable support for
+researchers, engineers, and developers in their pursuit of innovative solutions
+and advancements in CAE simulations. The name reflects the software's mission to
+be a loyal companion in the journey toward groundbreaking discoveries and
+industrial applications.
 
 # Installation
+
+## Miniconda
+
+```bash
+mkdir -p ~/miniconda3
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda3/miniconda.sh
+bash ~/miniconda3/miniconda.sh -b -u -p ~/miniconda3
+rm -rf ~/miniconda3/miniconda.sh
+~/miniconda3/bin/conda init bash
+```
+
+```bash
+conda create -n gpufealpy310 python=3.10
+conda activate gpufealpy310
+conda install numpy=2.0.1 -c conda-forge #2.0.1
+conda install ipython notebook -c conda-forge
+conda install jaxlib=*=*cuda* jax cuda-nvcc -c conda-forge -c nvidia # 0.4.31
+conda install cupy -c conda-forge  -c nvidia
+conda install pytorch=2.3.1 -c conda-forge -c nvidia
+
+```
 
 ## From Source (Recommanded)
 
@@ -38,7 +79,8 @@ cd fealpy
 pip install -e .
 ```
 
-If you want to install optional dependencies, such as `pypardiso`, `pyamg`, `meshpy` and so on, you can do so by specifying the [optional] extra:
+If you want to install optional dependencies, such as `pypardiso`, `pyamg`,
+`meshpy` and so on, you can do so by specifying the [optional] extra:
 ```
 pip install -e .[optional]
 ```

@@ -9,18 +9,21 @@ from torch.autograd import Function
 from .. import logger
 
 
-def sparse_cg(A: Tensor, b: Tensor, x0: Optional[Tensor]=None,
+def sparse_cg(A: Tensor, b: Tensor, x0: Optional[Tensor]=None, *,
+              batch_first: bool=False,
               atol: float=1e-12, rtol: float=1e-8, maxiter: Optional[int]=10000) -> Tensor:
-    r"""Solve a linear system Ax = b using the Conjugate Gradient (CG) method.
+    """Solve a linear system Ax = b using the Conjugate Gradient (CG) method.
 
     Args:
         A (Tensor): The coefficient matrix of the linear system, must be a 2D sparse CSR or COO tensor.
         b (Tensor): The right-hand side vector of the linear system, can be a 1D or 2D tensor.
-        x0 (Tensor): Initial guess for the solution, a 1D or 2D tensor.
+        x0 (Tensor): Initial guess for the solution, a 1D or 2D tensor.\
         Must have the same shape as b when reshaped appropriately.
+        batch_first (bool, optional): Whether the batch dimension of `b` and `x0`\
+        is the first dimension. Default is False.
         atol (float, optional): Absolute tolerance for convergence. Default is 1e-12.
         rtol (float, optional): Relative tolerance for convergence. Default is 1e-8.
-        maxiter (int, optional): Maximum number of iterations allowed. Default is 10000.
+        maxiter (int, optional): Maximum number of iterations allowed. Default is 10000.\
         If not provided, the method will continue until convergence based on the given tolerances.
 
     Returns:
@@ -35,7 +38,8 @@ def sparse_cg(A: Tensor, b: Tensor, x0: Optional[Tensor]=None,
     """
     assert isinstance(A, Tensor), "A must be a torch.Tensor"
     assert isinstance(b, Tensor), "b must be a torch.Tensor"
-    assert isinstance(x0, Tensor), "x0 must be a torch.Tensor"
+    if x0 is not None:
+        assert isinstance(x0, Tensor), "x0 must be a torch.Tensor if not None"
     unsqueezed = False
 
     if not (A.is_sparse_csr or A.is_sparse):
@@ -51,9 +55,6 @@ def sparse_cg(A: Tensor, b: Tensor, x0: Optional[Tensor]=None,
         else:
             raise ValueError("b must be a 2D dense tensor")
 
-    if A.shape[1] != b.shape[0]:
-        raise ValueError("b and A must have the same number of rows")
-
     if x0 is None:
         x0 = torch.zeros_like(b, requires_grad=False)
     else:
@@ -62,10 +63,19 @@ def sparse_cg(A: Tensor, b: Tensor, x0: Optional[Tensor]=None,
         if x0.shape != b.shape:
             raise ValueError("x0 and b must have the same shape")
 
+    if batch_first:
+        b = b.transpose(0, 1)
+        x0 = x0.transpose(0, 1)
+
+    if A.shape[1] != b.shape[0]:
+        raise ValueError("b and A must have the same number of rows")
+
     sol = SparseCG.apply(A, b, x0, atol, rtol, maxiter)
 
     if unsqueezed:
         sol = sol.squeeze(1)
+    if batch_first:
+        sol = sol.transpose(0, 1)
     return sol
 
 
@@ -73,8 +83,10 @@ class SparseCG(Function):
     @staticmethod
     def forward(A, b, x0, atol, rtol, maxiter):
         # initialize
-        x = x0                 # (dof, batch)
-        r = b - mm(A, x0)      # (dof, batch)
+        A = A.detach()
+        b = b.detach()
+        x = x0.detach()        # (dof, batch)
+        r = b - mm(A, x)       # (dof, batch)
         p = r                  # (dof, batch)
         n_iter = 0
         b_norm = b.norm()
@@ -143,5 +155,6 @@ class SparseCG(Function):
         if ctx.needs_input_grad[1]:
             weights = grad_output.mean(dim=-1, keepdim=True)
             grad_b = mm(inv_A, weights)
+            grad_b = torch.broadcast_to(grad_b, x.shape)
 
         return grad_A, grad_b, None, None, None, None
